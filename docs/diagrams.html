@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spark AI Lead Agent - Architecture & Flow Diagrams</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --heading: #f0f6fc;
+      --accent: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+    }
+    h1 {
+      color: var(--heading);
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+    p.lead {
+      color: #8b949e;
+      margin: 0;
+      font-size: 16px;
+    }
+    .diagram-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 36px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+    .diagram-card h2 {
+      margin-top: 0;
+      color: var(--heading);
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 999px;
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      margin-top: 20px;
+      background: #0d1117;
+      padding: 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    footer {
+      text-align: center;
+      color: #8b949e;
+      font-size: 13px;
+      margin-top: 48px;
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+    }
+  </style>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#0d1117',
+        primaryColor: '#1f242d',
+        primaryTextColor: '#f0f6fc',
+        primaryBorderColor: '#58a6ff',
+        lineColor: '#58a6ff',
+        secondaryColor: '#161b22',
+        tertiaryColor: '#0d1117'
+      }
+    });
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Spark AI Lead Qualification Agent</h1>
+      <p class="lead">Interactive Architecture, Use Case & Flow Diagrams (Rendered with Mermaid.js)</p>
+    </header>
+
+    <!-- Diagram 1 -->
+    <section class="diagram-card">
+      <h2>1. Use Case Diagram <span class="badge">Functional Roles & Permissions</span></h2>
+      <p>Shows how external leads, sales representatives, SDRs, and support teams interact with the AI triage system.</p>
+      <div class="mermaid">
+graph LR
+    Visitor["Inbound Lead - Visitor"]
+    SalesRep["Sales Lead - Closer"]
+    SDR["SDR Team"]
+    SupportRep["Support Team"]
+
+    subgraph System["Spark AI Lead Agent Platform"]
+        UC1["Submit Web Enquiry"]
+        UC2["Validate & Reject Bad Input - 400"]
+        UC3["AI Evidence Gathering - Tool Calling"]
+        UC4["Classify Priority & Intent - Structured JSON"]
+        UC5["Upsert Contact in HubSpot / Mock CRM"]
+        UC6["Stage Assignment - Hot / Warm / Cold / Support"]
+        UC7["Page Hot Leads on Slack - Block Kit"]
+        UC8["Fallback on Upstream Outage - Degraded"]
+        UC9["Audit Traces & Historical Logging"]
+    end
+
+    Visitor --> UC1
+    UC1 --> UC2
+    UC2 --> UC3
+    UC3 --> UC4
+    UC4 --> UC5
+    UC4 --> UC6
+    UC6 --> UC7
+    UC3 -.-> UC8
+    UC4 --> UC9
+
+    UC7 --> SalesRep
+    UC6 --> SDR
+    UC6 --> SupportRep
+      </div>
+    </section>
+
+    <!-- Diagram 2 -->
+    <section class="diagram-card">
+      <h2>2. Complete System Flow & Data Pipeline <span class="badge">n8n + FastAPI + HubSpot + Slack</span></h2>
+      <p>The complete end-to-end execution path across Railway cloud, showing all 20 n8n nodes, AI tool calls, dual fallback paths, and external third-party integrations.</p>
+      <div class="mermaid">
+flowchart TD
+    Form["Web Intake Form - index.html"]
+    
+    subgraph n8n_Engine["n8n Orchestration Spine - Railway Cloud"]
+        N1["Node 1: Webhook Listener - lead-intake"]
+        N2{"Node 2: Code Validation - Name, Email, Length"}
+        N4["Node 4: Respond HTTP 400 - Bad Request"]
+        N5["Node 5: HTTP Call: POST /api/v1/classify"]
+        N6["Node 6: Fallback JS Heuristic - Keyword Scorer"]
+        N7["Node 7: Prepare CRM Payload & Stages"]
+        N8["Node 8: HTTP Call: POST /api/v1/crm/upsert"]
+        N10["Node 10: Handle CRM Failure - Degraded Record"]
+        N11{"Node 11: Switch on Priority"}
+        N12{"Node 12: Slack Configured?"}
+        N14["Node 14: Post Slack Block Kit Alert"]
+        N15["Node 15: Fallback Terminal / DB Notify"]
+        N17["Node 17: No Alert Needed - Silence Low/Med"]
+        N18["Node 18: HTTP Call: POST /api/v1/leads/record"]
+        N20["Node 20: Respond HTTP 200 to Form"]
+    end
+
+    subgraph FastAPI_Microservice["FastAPI AI Service - Stateless Microservice"]
+        Agent["LeadAgent Loop - explicit Python"]
+        T1["Tool: extract_intent_signals - Regex Vocab"]
+        T2["Tool: analyse_email_domain - Domain Match"]
+        T3["Tool: lookup_existing_contact - SQLite History"]
+        RulesFallback["Deterministic Rules Engine - rules.py"]
+        OpenAI["OpenAI GPT-4o-mini - Strict JSON Schema"]
+        DB[("SQLite Leads & Run Traces")]
+    end
+
+    subgraph ThirdParty["Third-Party Integrations"]
+        HubSpot["HubSpot CRM v3 - Contacts & Custom AI Fields"]
+        Slack["Slack Channel #sales-lead - Incoming Webhook"]
+    end
+
+    Form -->|POST Lead Payload| N1
+    N1 --> N2
+    N2 -->|Invalid| N4
+    N2 -->|Valid| N5
+
+    N5 -->|HTTP| Agent
+    Agent --> T1
+    Agent --> T2
+    Agent --> T3
+    Agent --> OpenAI
+    OpenAI -.->|5xx / Timeout / Refusal| RulesFallback
+    Agent -->|Structured Outcome| N5
+    N5 -.->|FastAPI Offline| N6
+
+    N5 --> N7
+    N6 --> N7
+    N7 --> N8
+    N8 -->|Upsert Request| HubSpot
+    N8 -.->|HubSpot Error| N10
+
+    N8 --> N11
+    N10 --> N11
+
+    N11 -->|High Priority| N12
+    N11 -->|Medium Priority| N17
+    N11 -->|Low Priority| N17
+
+    N12 -->|Configured| N14
+    N12 -->|Unconfigured| N15
+    N14 -->|HTTP Webhook| Slack
+
+    N14 --> N18
+    N15 --> N18
+    N17 --> N18
+
+    N18 -->|Persist Audit| DB
+    N18 --> N20
+    N20 -->|Display Result Card| Form
+      </div>
+    </section>
+
+    <footer>
+      Spark AI Lead Qualification Agent &bull; Verified on n8n &bull; Ready for Demo Recording
+    </footer>
+  </div>
+</body>
+</html>
