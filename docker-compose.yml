@@ -1,0 +1,73 @@
+# Brings up the whole system: AI service, n8n, and a static host for the form.
+#
+#   cp .env.example .env && docker compose up --build
+#
+# Then:
+#   http://localhost:3000   lead intake form
+#   http://localhost:5678   n8n editor (import n8n/workflow.lead-qualification.json)
+#   http://localhost:8000/docs   API reference
+
+services:
+  api:
+    build: .
+    container_name: spark-lead-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network the DB lives on a named volume.
+      DATABASE_PATH: /app/data/leads.db
+    volumes:
+      - api-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: spark-lead-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # The workflow reads these with {{ $env.NAME }}.
+      API_BASE_URL: http://api:8000
+      API_KEY: ${API_KEY:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      # Required for $env to be readable inside Code and expression fields.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Asia/Dubai}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      WEBHOOK_URL: http://localhost:5678/
+    volumes:
+      - n8n-data:/home/node/.n8n
+      # Mounted read-only so the workflow can be imported from inside the
+      # container: docker compose exec n8n n8n import:workflow \
+      #   --input=/workflows/workflow.lead-qualification.json
+      - ./n8n:/workflows:ro
+
+  # Static host for frontend/index.html. Not required - opening the file
+  # directly works too - but it avoids file:// CORS surprises.
+  web:
+    image: nginx:alpine
+    container_name: spark-lead-web
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+
+volumes:
+  api-data:
+  n8n-data:

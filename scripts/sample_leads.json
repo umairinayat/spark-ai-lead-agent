@@ -1,0 +1,103 @@
+[
+  {
+    "expected_priority": "High",
+    "note": "Concrete project, budget, timeline, decision maker, team size, asks for a call.",
+    "lead": {
+      "name": "Sara Malik",
+      "email": "sara@northwind-logistics.com",
+      "company": "Northwind Logistics",
+      "message": "We are a 40-person freight brokerage and we need to automate quote follow-ups out of our GoHighLevel CRM. Budget is around $15k and we want to go live before the end of Q4. Can we book a call this week to scope it?"
+    }
+  },
+  {
+    "expected_priority": "High",
+    "note": "Founder, named systems, volume figures, explicit demo request.",
+    "lead": {
+      "name": "Daniel Okafor",
+      "email": "daniel@brightpath.health",
+      "company": "BrightPath Health",
+      "message": "I am the founder of a clinic group with 12 locations. We handle roughly 3000 patient enquiries a month across WhatsApp and web forms and our front desk cannot keep up. We want an AI agent that triages them and pushes the urgent ones into HubSpot. Could you show me a demo next Tuesday? We have budget approved for a pilot."
+    }
+  },
+  {
+    "expected_priority": "Medium",
+    "note": "Real business interest, no budget or timeline stated.",
+    "lead": {
+      "name": "Priya Raman",
+      "email": "priya.raman@velocitycommerce.io",
+      "company": "Velocity Commerce",
+      "message": "Hi, we run a mid-sized ecommerce operation and have been reading about AI agents for customer enquiries. Not sure yet whether it makes sense for us. Could you share some information on how the process typically works and what kind of results other retailers see?"
+    }
+  },
+  {
+    "expected_priority": "Medium",
+    "note": "Personal email but a specific, plausible automation project.",
+    "lead": {
+      "name": "Tom Bradley",
+      "email": "tombradley88@gmail.com",
+      "company": "Bradley Property Group",
+      "message": "Looking into automating the way enquiries from our property listings get routed to the right agent. We get maybe 200 a week. Wanted to understand whether this is something you build and roughly what is involved."
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "note": "Job application.",
+    "lead": {
+      "name": "Ahmed Hassan",
+      "email": "ahmed.hassan.dev@gmail.com",
+      "company": "",
+      "message": "Respected Sir/Madam, I am a fresh graduate in computer science and I am applying for any available internship or junior developer position at your company. Please find my CV attached. I am a hard worker and fast learner."
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "note": "Agency cold pitch selling to us.",
+    "lead": {
+      "name": "Growth Team",
+      "email": "outreach@rankfastmedia.biz",
+      "company": "RankFast Media",
+      "message": "Hello, our agency specialises in SEO services and we help companies like yours rank on page one. We offer guaranteed results and high quality backlinks at very competitive rates. Would you like to partner with us? Reply for our price list."
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "note": "Spam markers, disposable domain.",
+    "lead": {
+      "name": "Crypto Alerts",
+      "email": "winner@mailinator.com",
+      "company": "",
+      "message": "CONGRATULATIONS YOU have been selected! Limited time offer, click here to claim your free bitcoin bonus. Make $5000 a week working from home, 100% risk-free!"
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "note": "Existing customer support question, should route to support not sales.",
+    "lead": {
+      "name": "Rachel Dunn",
+      "email": "rachel.dunn@meridiansupply.co.uk",
+      "company": "Meridian Supply",
+      "message": "We are already a customer and our workflow stopped running this morning. I keep getting an error when the automation tries to sync. Can someone look at this urgently?"
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "note": "Too vague to act on.",
+    "lead": {
+      "name": "J",
+      "email": "j@outlook.com",
+      "company": "",
+      "message": "info pls"
+    }
+  },
+  {
+    "expected_priority": "Low",
+    "acceptable": ["Low", "Medium"],
+    "note": "Academic research request. Genuine, but not a sales lead - the academic-domain penalty is deliberate. Graded as a band because reasonable people disagree.",
+    "lead": {
+      "name": "Lina Ferrer",
+      "email": "l.ferrer@uni-hamburg.ac.uk",
+      "company": "University of Hamburg",
+      "message": "I am researching agentic AI adoption in mid-market sales teams and would like to understand how your lead qualification approach handles edge cases. Would someone be willing to answer a few questions for an academic paper?"
+    }
+  }
+]

@@ -1,0 +1,751 @@
+{
+  "id": "sparkAiLeadQual01",
+  "name": "Spark AI - Lead Qualification Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "98c3f4b2-ab39-5226-ad39-384c19d6bef8",
+      "name": "Lead Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -780,
+        300
+      ],
+      "webhookId": "1236cd56-ad55-58e7-a53a-c0ec73a903ca"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and normalise the inbound lead BEFORE spending an LLM call.\n// Anything that fails here throws, which routes to the error output and\n// returns a 400 to the caller. Cheap rejection of junk is the first line of\n// error handling in this pipeline.\nconst REQUIRED = ['name', 'email', 'message'];\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nconst out = [];\nfor (const item of $input.all()) {\n  // The webhook node nests the POST body under `body`.\n  const body = item.json.body ?? item.json;\n  const errors = [];\n\n  for (const field of REQUIRED) {\n    if (body[field] === undefined || String(body[field]).trim() === '') {\n      errors.push(field + ' is required');\n    }\n  }\n  if (body.email && !EMAIL_RE.test(String(body.email).trim())) {\n    errors.push('email is not a valid address');\n  }\n  if (body.message && String(body.message).length > 8000) {\n    errors.push('message exceeds 8000 characters');\n  }\n  if (errors.length) {\n    throw new Error('Lead validation failed: ' + errors.join('; '));\n  }\n\n  out.push({\n    json: {\n      receivedAt: new Date().toISOString(),\n      lead: {\n        name: String(body.name).trim().slice(0, 120),\n        email: String(body.email).trim().toLowerCase(),\n        company: String(body.company ?? '').trim().slice(0, 160),\n        message: String(body.message).trim(),\n        source: String(body.source ?? 'n8n-webhook').slice(0, 60),\n        phone: String(body.phone ?? '').trim().slice(0, 40),\n      },\n    },\n  });\n}\nreturn out;\n"
+      },
+      "id": "3c270543-58aa-5a89-8ad0-902a7cceb82e",
+      "name": "Validate & Normalise Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        300
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validation rejected the payload. Return a 400 with something actionable\n// rather than a bare 500.\nconst err = $json.error?.message || $json.error || $json.message || 'invalid lead payload';\n// n8n appends \"[line N]\" to errors thrown inside a Code node. That is an\n// internal detail of our workflow, not something the caller should see.\nconst detail = String(err)\n  .replace(/^Lead validation failed: /, '')\n  .replace(/\\s*\\[line \\d+\\]\\s*$/, '');\n\nreturn [{\n  json: {\n    status: 'rejected',\n    error: 'validation_failed',\n    detail,\n  },\n}];\n"
+      },
+      "id": "9a990370-4829-5919-ab38-99e78dc8d6e1",
+      "name": "Reject Invalid Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -340,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "e2319090-83a9-5a84-bd79-7dd93e999085",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -120,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE_URL || 'http://api:8000' }}/api/v1/classify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.lead) }}",
+        "options": {
+          "timeout": 45000
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.API_KEY || '' }}"
+            }
+          ]
+        }
+      },
+      "id": "02a66a44-c793-5c51-887c-697bf2b469b4",
+      "name": "Qualify Lead (AI Agent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -340,
+        280
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reached only when the AI service failed every retry.\n//\n// Dropping the lead here would be the worst possible outcome: a 503 from a\n// model provider must not cost a sale. So we apply a conservative keyword\n// heuristic, mark the result degraded, and let the CRM write and the alert\n// proceed. The degraded flag is stored, so these leads can be re-scored later.\nconst lead = $('Validate & Normalise Lead').first().json.lead;\nconst text = (lead.message + ' ' + lead.company).toLowerCase();\n\nconst POSITIVE = [\n  /budget|pricing|quote|cost|\\$\\d/,\n  /asap|urgent|deadline|this week|next week/,\n  /founder|ceo|cto|head of|director|owner/,\n  /demo|call|meeting|pilot|proposal/,\n  /\\d+\\s*(users|seats|employees|leads)/,\n];\nconst NEGATIVE = [\n  /resume|cv|internship|applying for|job opening/,\n  /we offer|our agency|seo services|backlinks/,\n  /click here|crypto|bitcoin|casino|limited time offer/,\n];\n\nconst hits = POSITIVE.filter((r) => r.test(text)).length;\nconst blocked = NEGATIVE.some((r) => r.test(text));\n\nlet priority = 'Medium';\nif (blocked) priority = 'Low';\nelse if (hits >= 2) priority = 'High';\nelse if (hits === 0) priority = 'Low';\n\nconst firstName = (lead.name || 'there').split(' ')[0];\nconst err = $json.error?.message || $json.error || $json.message || 'AI service unavailable';\n\nreturn [{\n  json: {\n    receivedAt: new Date().toISOString(),\n    lead,\n    classification: {\n      priority,\n      reason:\n        'Fallback classification: the AI service was unreachable (' + String(err).slice(0, 160) +\n        '). Matched ' + hits + ' positive keyword signal(s)' +\n        (blocked ? ' and a disqualifying signal' : '') + '.',\n      follow_up_message:\n        'Hi ' + firstName + ', thanks for getting in touch. Your enquiry has reached us and ' +\n        'a member of the team will come back to you shortly with a proper response.\\n\\n' +\n        'The Spark AI team',\n      summary: 'Scored by the n8n fallback heuristic because the AI service was unavailable.',\n      intent: blocked ? 'spam' : 'general_enquiry',\n      confidence: 0.3,\n      signals: ['n8n-fallback-heuristic'],\n      recommended_owner: priority === 'High' ? 'sales_lead' : 'sdr',\n    },\n    agent: {\n      model: 'n8n-fallback-heuristic',\n      degraded: true,\n      degraded_reason: String(err).slice(0, 300),\n      attempts: 0,\n      latency_ms: 0,\n      tool_calls: [],\n    },\n  },\n}];\n"
+      },
+      "id": "f0c5c210-a6ba-5401-8dae-cb52371e826b",
+      "name": "Fallback Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Join point for the two AI paths (service response and fallback). Everything\n// downstream reads this shape, so the rest of the workflow does not need to\n// know which path produced the classification.\nconst item = $input.first().json;\n\nconst STAGE_BY_PRIORITY = {\n  High: 'Hot - Contact Today',\n  Medium: 'Warm - Nurture',\n  Low: 'Cold - Archive',\n};\n// Some intents should never enter the sales pipeline whatever they score.\nconst STAGE_BY_INTENT = {\n  support_request: 'Routed to Support',\n  job_application: 'Not a Sales Lead',\n  vendor_pitch: 'Not a Sales Lead',\n  spam: 'Not a Sales Lead',\n};\n\nconst c = item.classification;\nconst stage = STAGE_BY_INTENT[c.intent] ?? STAGE_BY_PRIORITY[c.priority] ?? 'Warm - Nurture';\n\nreturn [{\n  json: {\n    leadId: item.lead_id ?? '',\n    receivedAt: item.receivedAt ?? new Date().toISOString(),\n    lead: item.lead,\n    classification: c,\n    agent: item.agent ?? {},\n    stage,\n    shouldNotify: c.priority === 'High' && c.intent !== 'spam',\n  },\n}];\n"
+      },
+      "id": "2ca65da7-e667-52d2-916d-c1775d7024dc",
+      "name": "Prepare CRM Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE_URL || 'http://api:8000' }}/api/v1/crm/upsert",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead: $json.lead, classification: $json.classification, lead_id: $json.leadId || '' }) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.API_KEY || '' }}"
+            }
+          ]
+        }
+      },
+      "id": "4074dc31-cbc1-51b0-8b36-fc471c529b54",
+      "name": "Sync Contact to CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// The HTTP node replaced the item with the CRM response, so re-attach the\n// lead context the rest of the workflow needs.\nconst base = $('Prepare CRM Payload').first().json;\nreturn [{ json: { ...base, crm: $json } }];\n"
+      },
+      "id": "d65b76f4-f29f-566f-884c-332818f24e56",
+      "name": "Attach CRM Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CRM write failed after its retries. The lead is already qualified and that\n// work is worth keeping, so we continue with a degraded CRM record rather\n// than failing the run. The alert still fires and the outcome is still\n// stored, with the error attached for replay.\nconst base = $('Prepare CRM Payload').first().json;\nconst err = $json.error?.message || $json.error || $json.message || 'CRM request failed';\n\nreturn [{\n  json: {\n    ...base,\n    crm: {\n      provider: 'unavailable',\n      contact_id: '',\n      created: false,\n      opportunity_id: '',\n      pipeline: '',\n      stage: base.stage,\n      url: '',\n      degraded: true,\n      // `error_detail`, not `error`: n8n's HTTP Request node treats a\n      // top-level `error` key in a JSON response as a node failure, which\n      // silently triggered three retries of the CRM write. Keeping the same\n      // field name here means the shape matches the API's.\n      error_detail: String(err).slice(0, 300),\n    },\n  },\n}];\n"
+      },
+      "id": "dbe87de4-fe5f-5639-9510-a807f5b32298",
+      "name": "Handle CRM Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "bd6c7ab0867a5fb1",
+                    "leftValue": "={{ $json.classification.priority }}",
+                    "rightValue": "High",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "High"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d55f2844749459de",
+                    "leftValue": "={{ $json.classification.priority }}",
+                    "rightValue": "Medium",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Medium"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3d970b931e7a5fc3",
+                    "leftValue": "={{ $json.classification.priority }}",
+                    "rightValue": "Low",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Low"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "383708d9-5a01-5177-9039-33bce5e53a99",
+      "name": "Route by Priority",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "65cccdb45f455018",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').startsWith('https://hooks.slack.com') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6c3db4fb-806c-5809-b7f4-b07af74fd150",
+      "name": "Slack Webhook Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a Slack Block Kit message. Built here rather than inline in the HTTP\n// node so the layout is readable and testable.\nconst d = $json;\nconst c = d.classification;\nconst lead = d.lead;\nconst crm = d.crm ?? {};\nconst header = ':fire: High priority lead - ' + (lead.company || 'Unknown company');\n\nconst quoted = String(lead.message || '').slice(0, 600).replace(/\\n/g, '\\n>');\n\nconst payload = {\n  text: header,\n  blocks: [\n    { type: 'header', text: { type: 'plain_text', text: header.slice(0, 150), emoji: true } },\n    {\n      type: 'section',\n      fields: [\n        { type: 'mrkdwn', text: '*Name*\\n' + lead.name },\n        { type: 'mrkdwn', text: '*Email*\\n' + lead.email },\n        { type: 'mrkdwn', text: '*Company*\\n' + (lead.company || 'Unknown') },\n        { type: 'mrkdwn', text: '*Intent*\\n' + String(c.intent || '').replace(/_/g, ' ') },\n        { type: 'mrkdwn', text: '*Confidence*\\n' + Math.round((c.confidence ?? 0) * 100) + '%' },\n        { type: 'mrkdwn', text: '*Owner*\\n' + String(c.recommended_owner || '').replace(/_/g, ' ') },\n      ],\n    },\n    { type: 'section', text: { type: 'mrkdwn', text: ('*Why this priority*\\n' + c.reason).slice(0, 2900) } },\n    { type: 'section', text: { type: 'mrkdwn', text: ('*Their message*\\n>' + quoted).slice(0, 2900) } },\n    {\n      type: 'section',\n      text: {\n        type: 'mrkdwn',\n        text: '*Suggested reply*\\n```' + String(c.follow_up_message || '').slice(0, 1200) + '```',\n      },\n    },\n    {\n      type: 'context',\n      elements: [{\n        type: 'mrkdwn',\n        text: 'CRM: ' + (crm.provider || 'n/a') + ' ' + (crm.contact_id || '(not written)') +\n              ' -> ' + (crm.stage || d.stage) + ' | delivered by n8n',\n      }],\n    },\n  ],\n};\n\nreturn [{ json: { ...d, slackPayload: payload } }];\n"
+      },
+      "id": "69e87cb5-5142-5bbb-95f2-ef0a79bc6b31",
+      "name": "Build Slack Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.slackPayload) }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "2363d6c2-a6b2-56db-b3fa-5b243f90b805",
+      "name": "Post Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        40
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE_URL || 'http://api:8000' }}/api/v1/notify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead: $json.lead, classification: $json.classification, lead_id: $json.leadId || '', crm: $json.crm || null, force: true }) }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.API_KEY || '' }}"
+            }
+          ]
+        }
+      },
+      "id": "45618f22-9b85-5d81-8f32-942e5a87d67f",
+      "name": "Notify via API (fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Both notification branches converge here so the record step sees one shape.\nconst base = $('Prepare CRM Payload').first().json;\n\nlet crm = null;\ntry {\n  crm = $('Attach CRM Result').first().json.crm;\n} catch (e) {\n  try { crm = $('Handle CRM Failure').first().json.crm; } catch (e2) { crm = null; }\n}\n\n// Which branch actually ran? Referencing a node that did not execute throws,\n// so this doubles as the branch test.\nlet viaSlack = false;\ntry {\n  $('Post Slack Alert').first();\n  viaSlack = true;\n} catch (e) {\n  viaSlack = false;\n}\n\nconst resp = $json ?? {};\nlet notification;\nif (resp.channel) {\n  // Came back from the API notify fallback, which returns a NotificationResult.\n  notification = {\n    channel: resp.channel,\n    sent: !!resp.sent,\n    skipped_reason: resp.skipped_reason ?? '',\n    error_detail: resp.error_detail ?? '',\n  };\n} else if (resp.error) {\n  // The notification call failed but the node was set to continue, so the\n  // lead still gets recorded. n8n puts the failure on `error` in that case.\n  notification = {\n    channel: viaSlack ? 'slack' : 'api-fallback',\n    sent: false,\n    skipped_reason: '',\n    error_detail: String(resp.error.message ?? resp.error).slice(0, 300),\n  };\n} else {\n  notification = { channel: 'slack', sent: true, skipped_reason: '', error_detail: '' };\n}\n\nreturn [{ json: { ...base, crm, notification } }];\n"
+      },
+      "id": "e77e6b81-ee21-53df-826b-dbf0b978db5f",
+      "name": "Mark Notified",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Medium and Low leads are stored and stage-assigned, but sales is not paged.\n// Alert fatigue is what stops people trusting the High alerts.\nconst base = $('Prepare CRM Payload').first().json;\n\nlet crm = null;\ntry {\n  crm = $('Attach CRM Result').first().json.crm;\n} catch (e) {\n  try { crm = $('Handle CRM Failure').first().json.crm; } catch (e2) { crm = null; }\n}\n\nreturn [{\n  json: {\n    ...base,\n    crm,\n    notification: {\n      channel: 'none',\n      sent: false,\n      skipped_reason: 'priority ' + base.classification.priority + ' does not page the sales team',\n      error_detail: '',\n    },\n  },\n}];\n"
+      },
+      "id": "f8d6aa3d-53b7-5e8e-811b-cbaf91bb4d92",
+      "name": "No Alert Needed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE_URL || 'http://api:8000' }}/api/v1/leads/record",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead: $json.lead, classification: $json.classification, lead_id: $json.leadId || '', crm: $json.crm || null, notification: $json.notification || null, agent: $json.agent || {}, source: 'n8n' }) }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.API_KEY || '' }}"
+            }
+          ]
+        }
+      },
+      "id": "f888b942-fcb9-5c77-ab3a-8f6cd126d0c8",
+      "name": "Record Outcome",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1880,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shape the webhook response. The browser form renders this directly.\n//\n// Read from whichever notification branch actually ran, NOT from\n// 'Prepare CRM Payload' - that node runs before the notification decision, so\n// sourcing the response from it always reported notified:false even on High\n// priority leads that had just paged the sales team.\nlet base = null;\ntry {\n  base = $('Mark Notified').first().json;\n} catch (e) {\n  try { base = $('No Alert Needed').first().json; } catch (e2) { base = null; }\n}\nif (!base) base = $('Prepare CRM Payload').first().json;\n\nconst stored = $json ?? {};\nconst crm = base.crm ?? null;\nconst c = base.classification;\nreturn [{\n  json: {\n    status: 'ok',\n    lead_id: stored.lead_id || base.leadId || '',\n    priority: c.priority,\n    intent: c.intent,\n    confidence: c.confidence,\n    reason: c.reason,\n    summary: c.summary,\n    follow_up_message: c.follow_up_message,\n    signals: c.signals ?? [],\n    recommended_owner: c.recommended_owner,\n    pipeline_stage: base.stage,\n    crm: crm\n      ? {\n          provider: crm.provider,\n          contact_id: crm.contact_id,\n          created: !!crm.created,\n          stage: crm.stage,\n          degraded: !!crm.degraded,\n          error_detail: crm.error_detail ?? '',\n        }\n      : null,\n    notified: !!(base.notification && base.notification.sent),\n    notification_channel: base.notification?.channel ?? 'none',\n    notification_skipped_reason: base.notification?.skipped_reason ?? '',\n    ai_degraded: !!(base.agent?.degraded),\n    processed_by: 'n8n',\n  },\n}];\n"
+      },
+      "id": "5797d312-b506-5502-9383-63a08db92862",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "67f26f0a-7515-5c85-8590-22550fd5c202",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2320,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Lead Intake Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate & Normalise Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Normalise Lead": {
+      "main": [
+        [
+          {
+            "node": "Qualify Lead (AI Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Invalid Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reject Invalid Lead": {
+      "main": [
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify Lead (AI Agent)": {
+      "main": [
+        [
+          {
+            "node": "Prepare CRM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback Classification": {
+      "main": [
+        [
+          {
+            "node": "Prepare CRM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare CRM Payload": {
+      "main": [
+        [
+          {
+            "node": "Sync Contact to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Contact to CRM": {
+      "main": [
+        [
+          {
+            "node": "Attach CRM Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach CRM Result": {
+      "main": [
+        [
+          {
+            "node": "Route by Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle CRM Failure": {
+      "main": [
+        [
+          {
+            "node": "Route by Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Priority": {
+      "main": [
+        [
+          {
+            "node": "Slack Webhook Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Alert Needed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Alert Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Webhook Configured?": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify via API (fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Post Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify via API (fallback)": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Notified": {
+      "main": [
+        [
+          {
+            "node": "Record Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Alert Needed": {
+      "main": [
+        [
+          {
+            "node": "Record Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Outcome": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "instanceId": "spark-ai-lead-agent",
+    "description": "Receives a lead on POST /webhook/lead-intake, qualifies it with the AI agent service, writes it to the configured CRM, alerts sales on High priority and stores the outcome. Every external call has retries and a degradation path."
+  }
+}
