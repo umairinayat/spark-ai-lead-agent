@@ -127,7 +127,7 @@
       </div>
       <div class="field">
         <label for="base">Endpoint</label>
-        <input id="base" value="http://localhost:5678/webhook/lead-intake">
+        <input id="base" value="https://n8n-production-fba9.up.railway.app/webhook/lead-intake">
         <div class="hint" id="status">Not checked yet.</div>
       </div>
 
@@ -166,7 +166,7 @@
 
   <section class="card" style="margin-top:18px">
     <h2>Recent leads <button class="ghost" id="refresh" type="button" style="float:right;margin-top:-4px">Refresh</button></h2>
-    <div class="scroll"><div id="recent"><p class="empty">Reads from the API at <code id="apihost">http://localhost:8000</code>.</p></div></div>
+    <div class="scroll"><div id="recent"><p class="empty">Reads from the API at <code id="apihost">https://spark-ai-lead-agent-production.up.railway.app</code>.</p></div></div>
   </section>
 
   <footer>
@@ -179,10 +179,11 @@
   "use strict";
 
   var ENDPOINTS = {
-    n8n: "http://localhost:5678/webhook/lead-intake",
-    api: "http://localhost:8000/api/v1/leads"
+    n8n: "https://n8n-production-fba9.up.railway.app/webhook/lead-intake",
+    api: "https://spark-ai-lead-agent-production.up.railway.app/api/v1/leads"
   };
-  var API_ROOT = "http://localhost:8000";
+  var API_ROOT = "https://spark-ai-lead-agent-production.up.railway.app";
+
 
   var $ = function (id) { return document.getElementById(id); };
 
