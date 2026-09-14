@@ -165,4 +165,7 @@ def _unknown_properties(body: str) -> set[str]:
     """HubSpot reports unknown properties inside the 400 body."""
     if "PROPERTY_DOESNT_EXIST" not in body and "does not exist" not in body:
         return set()
-    return set(re.findall(r"Property \"?([a-zA-Z0-9_]+)\"? does not exist", body))
+    matches = set(re.findall(r"Property\s*[\"\\'\s]+([a-zA-Z0-9_]+)[\"\\'\s]+does not exist", body, re.IGNORECASE))
+    matches.update(re.findall(r'\"name\"\s*:\s*[\"\\\'\s]+([a-zA-Z0-9_]+)[\"\\\'\s]+', body))
+    return matches
+

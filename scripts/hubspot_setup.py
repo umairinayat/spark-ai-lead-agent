@@ -20,6 +20,18 @@ import urllib.request
 BASE = os.environ.get("HUBSPOT_BASE_URL", "https://api.hubapi.com")
 TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 
+if not TOKEN:
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("HUBSPOT_TOKEN="):
+                    TOKEN = line.split("=", 1)[1].strip().strip('"').strip("'")
+                elif line.startswith("HUBSPOT_BASE_URL=") and "HUBSPOT_BASE_URL" not in os.environ:
+                    BASE = line.split("=", 1)[1].strip().strip('"').strip("'")
+
+
 PROPERTIES = [
     ("ai_priority", "AI Priority", "High / Medium / Low as judged by the agent"),
     ("ai_reason", "AI Reason", "Why the agent assigned this priority"),
